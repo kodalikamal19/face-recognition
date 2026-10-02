@@ -61,6 +61,36 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  // Sync Dataset Handler
+  const syncBtn = document.getElementById("syncBtn");
+  const syncIcon = document.getElementById("syncIcon");
+
+  if (syncBtn) {
+    syncBtn.addEventListener("click", async () => {
+      syncBtn.disabled = true;
+      if (syncIcon) syncIcon.style.animation = "spin 0.8s linear infinite";
+      showToast("Scanning project-dataset folder for new people...");
+      try {
+        const res = await fetch("/api/sync", { method: "POST" });
+        if (!res.ok) throw new Error("Sync failed");
+        const data = await res.json();
+        if (data.success) {
+          systemStatusText.textContent = `${data.total_enrolled} Students Enrolled`;
+          if (data.added && data.added.length > 0) {
+            showToast(`Enrolled ${data.added.length} new student(s): ${data.added.join(", ")}`);
+          } else {
+            showToast(`Dataset up to date (${data.total_enrolled} students enrolled)`);
+          }
+        }
+      } catch (e) {
+        showToast("Error syncing dataset");
+      } finally {
+        syncBtn.disabled = false;
+        if (syncIcon) syncIcon.style.animation = "";
+      }
+    });
+  }
+
   // 2. Load Sample Images
   async function loadSampleImages() {
     try {

@@ -121,6 +121,12 @@ body {
   font-weight: 400;
 }
 
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .status-badge {
   display: inline-flex;
   align-items: center;

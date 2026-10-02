@@ -6,12 +6,13 @@ import base64
 from pathlib import Path
 from typing import Optional
 
-from PIL import Image
+from PIL import Image, ImageEnhance
 import uvicorn
 from fastapi import FastAPI, File, UploadFile, Query, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
 
 # Ensure project root is in sys.path without modifying any existing src files
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -21,19 +22,85 @@ if str(PROJECT_ROOT) not in sys.path:
 from src.detector import FaceDetector
 from src.embedder import FaceEmbedder
 from src.recognizer import FaceRecognizer
-from src.utils import draw_annotations
+from src.utils import draw_annotations, get_image_paths
 
 # Paths
 EMBEDDINGS_PATH = PROJECT_ROOT / "embeddings" / "face_embeddings.pkl"
+DATASET_PATH = PROJECT_ROOT / "project-dataset"
+if not DATASET_PATH.exists():
+    DATASET_PATH = PROJECT_ROOT / "dataset"
 TEST_DIR = PROJECT_ROOT / "test"
 FRONTEND_DIR = PROJECT_ROOT / "frontend"
-
-from contextlib import asynccontextmanager
 
 # Global model instances (loaded once in memory for ultra-fast inference)
 detector: Optional[FaceDetector] = None
 embedder: Optional[FaceEmbedder] = None
 recognizer: Optional[FaceRecognizer] = None
+
+
+def sync_dataset_with_embeddings():
+    """
+    Dynamically scans project-dataset/ folder.
+    Automatically enrolls any missing student folders into the recognizer
+    and saves the updated database to embeddings/face_embeddings.pkl.
+    """
+    global detector, embedder, recognizer
+    if not DATASET_PATH.exists() or not recognizer:
+        return {"total_enrolled": len(recognizer.students) if recognizer else 0, "added": []}
+
+    student_dirs = sorted([
+        d.name for d in DATASET_PATH.iterdir()
+        if d.is_dir() and not d.name.startswith(".")
+    ])
+
+    enrolled_set = set(recognizer.students.keys())
+    missing_students = [s for s in student_dirs if s not in enrolled_set]
+
+    added = []
+    if missing_students and detector and embedder:
+        print(f">>> Found {len(missing_students)} new student folder(s) in {DATASET_PATH.name}: {missing_students}")
+        for roll_number in missing_students:
+            student_folder = DATASET_PATH / roll_number
+            img_files = get_image_paths(str(student_folder))
+            if not img_files:
+                continue
+
+            valid_embeddings = []
+            for img_path in img_files:
+                try:
+                    img = Image.open(img_path).convert("RGB")
+                    face_record = detector.detect_primary_face(img, min_confidence=0.85)
+                    if face_record is not None and face_record["crop"] is not None:
+                        crop = face_record["crop"]
+                        # 1. Original
+                        valid_embeddings.append(embedder.embed_crop(crop))
+                        # 2. Horizontal Flip
+                        flipped = crop.transpose(Image.FLIP_LEFT_RIGHT)
+                        valid_embeddings.append(embedder.embed_crop(flipped))
+                        # 3. Dim lighting simulation
+                        dim_crop = ImageEnhance.Brightness(crop).enhance(0.85)
+                        valid_embeddings.append(embedder.embed_crop(dim_crop))
+                        # 4. Bright lighting simulation
+                        bright_crop = ImageEnhance.Brightness(crop).enhance(1.15)
+                        valid_embeddings.append(embedder.embed_crop(bright_crop))
+                except Exception as e:
+                    print(f"Error reading {img_path}: {e}")
+
+            if valid_embeddings:
+                recognizer.enroll_student(roll_number, valid_embeddings)
+                added.append(roll_number)
+                print(f">>> Enrolled {roll_number} with {len(valid_embeddings)} embeddings")
+
+        if added:
+            recognizer.save_database(str(EMBEDDINGS_PATH))
+            print(f">>> Updated embeddings database saved to {EMBEDDINGS_PATH}")
+
+    return {
+        "total_enrolled": len(recognizer.students),
+        "students": sorted(list(recognizer.students.keys())),
+        "dataset_folders": student_dirs,
+        "added": added
+    }
 
 
 @asynccontextmanager
@@ -46,8 +113,10 @@ async def lifespan(app: FastAPI):
         embeddings_db_path=str(EMBEDDINGS_PATH) if EMBEDDINGS_PATH.exists() else None,
         similarity_threshold=0.70
     )
+    # Automatically scan project-dataset/ and enroll any new students
+    sync_dataset_with_embeddings()
     enrolled_count = len(recognizer.students) if recognizer else 0
-    print(f">>> Models loaded successfully! Enrolled students: {enrolled_count}")
+    print(f">>> Ready! Enrolled students: {enrolled_count}")
     yield
 
 
@@ -171,13 +240,28 @@ def process_image_recognition(image: Image.Image, threshold: float = 0.70):
 
 @app.get("/api/status")
 def get_status():
+    dataset_students = []
+    if DATASET_PATH.exists():
+        dataset_students = sorted([
+            d.name for d in DATASET_PATH.iterdir()
+            if d.is_dir() and not d.name.startswith(".")
+        ])
     enrolled_students = sorted(list(recognizer.students.keys())) if recognizer else []
     return {
         "status": "ready" if recognizer else "loading",
         "enrolled_count": len(enrolled_students),
+        "dataset_count": len(dataset_students),
         "enrolled_students": enrolled_students,
+        "dataset_students": dataset_students,
         "default_threshold": recognizer.threshold if recognizer else 0.70
     }
+
+
+@app.post("/api/sync")
+def sync_dataset_endpoint():
+    """Trigger manual re-scan of project-dataset/ folder to enroll new people."""
+    result = sync_dataset_with_embeddings()
+    return {"success": True, **result}
 
 
 @app.get("/api/samples")
@@ -232,7 +316,7 @@ async def recognize_upload(
     """
     Primary endpoint: Upload an image file and retrieve all detected roll numbers.
     """
-    if not file.content_type.startswith("image/"):
+    if file.content_type and not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="Uploaded file is not a valid image.")
 
     try:

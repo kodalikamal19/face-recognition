@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: classroom-face-recognition
+    runtime: python
+    plan: free
+    region: oregon
+    buildCommand: pip install -r requirements-prod.txt
+    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /healthz
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9

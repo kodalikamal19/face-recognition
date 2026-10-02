@@ -1,0 +1,36 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Local Virtual Environments (Critical: excludes 1GB+ local venv)
+kamal/
+venv/
+.venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Outputs & Debug face crops
+outputs/debug/
+outputs/*.jpg
+outputs/*.png
+
+# OS and IDE files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+
+# Environment variables
+.env
+.env.local
+
+# Docker
+.docker/
+
+# Ensure embeddings database is ALWAYS included
+!embeddings/face_embeddings.pkl

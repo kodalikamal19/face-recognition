@@ -1,0 +1,16 @@
+kamal/
+dataset/
+project-dataset/
+outputs/
+.git/
+.gitignore
+.dockerignore
+*.md
+run_app.bat
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+.idea/
+.vscode/
